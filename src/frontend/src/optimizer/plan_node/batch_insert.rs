@@ -115,6 +115,7 @@ impl ToBatchPb for BatchInsert {
             row_id_index: self.core.row_id_index.map(|index| index as _),
             returning: self.core.returning,
             session_id: self.base.ctx().session_ctx().session_id().0 as u32,
+            nullables: self.core.nullables.clone(),
         })
     }
 }

@@ -38,6 +38,7 @@ impl Planner {
             insert.default_columns,
             insert.row_id_index,
             returning,
+            insert.nullables,
         ))
         .into();
         // If containing RETURNING, add one logicalproject node

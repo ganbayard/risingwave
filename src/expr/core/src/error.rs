@@ -108,6 +108,10 @@ pub enum ExprError {
     #[error("too few arguments for format()")]
     TooFewArguments,
 
+    // TODO(Kexiang): add col name and table name for better error message
+    #[error("null value violates not-null constraint")]
+    NotNullViolation,
+
     #[error("invalid state: {0}")]
     InvalidState(String),
 

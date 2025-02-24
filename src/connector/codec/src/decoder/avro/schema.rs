@@ -156,6 +156,7 @@ fn avro_field_to_column_desc(
                 additional_column_type: 0, // deprecated
                 additional_column: Some(AdditionalColumn { column_type: None }),
                 version: ColumnDescVersion::LATEST as _,
+                nullable: true,
             })
         }
         _ => {

@@ -90,6 +90,7 @@ impl Binder {
         &mut self,
         values: Values,
         expected_types: Option<Vec<DataType>>,
+        nullables: Option<Vec<(bool, &str)>>,
     ) -> Result<BoundValues> {
         assert!(!values.0.is_empty());
 
@@ -122,6 +123,13 @@ impl Binder {
                 .map(|col_index| align_types(bound.iter_mut().map(|row| &mut row[col_index])))
                 .try_collect()?,
         };
+
+        if let Some(nullables) = nullables {
+            bound = bound
+                .into_iter()
+                .map(|vec| Self::check_not_null(&nullables, vec))
+                .try_collect()?;
+        }
 
         let values_id = self.next_values_id();
         let schema = Schema::new(

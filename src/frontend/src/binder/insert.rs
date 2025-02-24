@@ -19,6 +19,7 @@ use itertools::Itertools;
 use risingwave_common::catalog::{ColumnCatalog, Schema, TableVersionId};
 use risingwave_common::types::DataType;
 use risingwave_common::util::iter_util::ZipEqFast;
+use risingwave_pb::expr::expr_node::Type as ExprType;
 use risingwave_sqlparser::ast::{Ident, ObjectName, Query, SelectItem};
 
 use super::statement::RewriteExprsRecursive;
@@ -26,7 +27,7 @@ use super::BoundQuery;
 use crate::binder::{Binder, Clause};
 use crate::catalog::TableId;
 use crate::error::{ErrorCode, Result, RwError};
-use crate::expr::{ExprImpl, InputRef};
+use crate::expr::{Expr, ExprImpl, FunctionCall, InputRef};
 use crate::user::UserId;
 use crate::utils::ordinal;
 
@@ -75,6 +76,9 @@ pub struct BoundInsert {
     pub returning_list: Vec<ExprImpl>,
 
     pub returning_schema: Option<Schema>,
+
+    // pub not_null_exprs: Vec<ExprImpl>,
+    pub nullables: Vec<bool>,
 }
 
 impl RewriteExprsRecursive for BoundInsert {
@@ -170,6 +174,21 @@ impl Binder {
             .map(|idx| cols_to_insert_in_table[*idx].data_type().clone())
             .collect();
 
+        let nullables: Vec<(bool, &str)> = col_indices_to_insert
+            .iter()
+            .map(|idx| {
+                (
+                    cols_to_insert_in_table[*idx].nullable(),
+                    cols_to_insert_in_table[*idx].name(),
+                )
+            })
+            .collect();
+
+        // let col_names: Vec<&str> = col_indices_to_insert
+        //     .iter()
+        //     .map(|idx| cols_to_insert_in_table[*idx].name())
+        //     .collect();
+
         // When the column types of `source` query do not match `expected_types`,
         // casting is needed.
         //
@@ -198,21 +217,29 @@ impl Binder {
         // afterwards.
         let bound_query;
         let cast_exprs;
+        // let not_null_exprs;
 
         let bound_column_nums = match source.as_simple_values() {
             None => {
                 bound_query = self.bind_query(source)?;
                 let actual_types = bound_query.data_types();
-                cast_exprs = match expected_types == actual_types {
-                    true => vec![],
-                    false => Self::cast_on_insert(
-                        &expected_types,
-                        actual_types
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, t)| InputRef::new(i, t).into())
-                            .collect(),
-                    )?,
+                let all_nullable = nullables.iter().all(|(nullable, _)| *nullable);
+                let type_match = expected_types == actual_types;
+                cast_exprs = if all_nullable && type_match {
+                    vec![]
+                } else {
+                    let mut cast_exprs = actual_types
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, t)| InputRef::new(i, t).into())
+                        .collect();
+                    if !type_match {
+                        cast_exprs = Self::cast_on_insert(&expected_types, cast_exprs)?
+                    }
+                    if !all_nullable {
+                        cast_exprs = Self::check_not_null(&nullables, cast_exprs)?
+                    }
+                    cast_exprs
                 };
                 bound_query.schema().len()
             }
@@ -222,7 +249,11 @@ impl Binder {
                     .first()
                     .expect("values list should not be empty")
                     .len();
-                let values = self.bind_values(values.clone(), Some(expected_types))?;
+                let values = self.bind_values(
+                    values.clone(),
+                    Some(expected_types),
+                    Some(nullables.clone()),
+                )?;
                 bound_query = BoundQuery::with_values(values);
                 cast_exprs = vec![];
                 values_len
@@ -299,6 +330,11 @@ impl Binder {
             } else {
                 None
             },
+            // not_null_exprs,
+            nullables: nullables
+                .into_iter()
+                .map(|(nullable, _)| nullable)
+                .collect(),
         };
         Ok(insert)
     }
@@ -309,14 +345,13 @@ impl Binder {
         expected_types: &Vec<DataType>,
         exprs: Vec<ExprImpl>,
     ) -> Result<Vec<ExprImpl>> {
-        let expr_num = exprs.len();
         let msg = match expected_types.len().cmp(&exprs.len()) {
             std::cmp::Ordering::Less => "INSERT has more expressions than target columns",
             _ => {
                 let expr_len = exprs.len();
                 return exprs
                     .into_iter()
-                    .zip_eq_fast(expected_types.iter().take(expr_num))
+                    .zip_eq_fast(expected_types.iter().take(expr_len))
                     .enumerate()
                     .map(|(i, (e, t))| {
                         let res = e.cast_assign(t.clone());
@@ -327,6 +362,39 @@ impl Binder {
                             .map_err(Into::into)
                         } else {
                             res.map_err(Into::into)
+                        }
+                    })
+                    .try_collect();
+            }
+        };
+        Err(ErrorCode::BindError(msg.into()).into())
+    }
+
+    /// Add not null check for the columns that are not nullable.
+    pub(super) fn check_not_null(
+        nullables: &Vec<(bool, &str)>,
+        exprs: Vec<ExprImpl>,
+    ) -> Result<Vec<ExprImpl>> {
+        let msg = match nullables.len().cmp(&exprs.len()) {
+            std::cmp::Ordering::Less => "INSERT has more expressions than target columns",
+            _ => {
+                let expr_len = exprs.len();
+                return exprs
+                    .into_iter()
+                    .zip_eq_fast(nullables.iter().take(expr_len))
+                    .enumerate()
+                    .map(|(i, (expr, (nullable, col_name)))| {
+                        if !nullable {
+                            let return_type = expr.return_type();
+                            let check_not_null = FunctionCall::new_unchecked(
+                                ExprType::CheckNotNull,
+                                vec![expr.into()],
+                                return_type,
+                            );
+                            // let res = expr.cast_assign(t.clone());
+                            Ok(check_not_null.into())
+                        } else {
+                            Ok(expr)
                         }
                     })
                     .try_collect();

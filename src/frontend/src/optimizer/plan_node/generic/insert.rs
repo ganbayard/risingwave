@@ -39,6 +39,7 @@ pub struct Insert<PlanRef: Eq + Hash> {
     pub default_columns: Vec<(usize, ExprImpl)>, // columns to be set to default
     pub row_id_index: Option<usize>,
     pub returning: bool,
+    pub nullables: Vec<bool>,
 }
 
 impl<PlanRef: GenericPlanRef> GenericPlanNode for Insert<PlanRef> {
@@ -126,6 +127,7 @@ impl<PlanRef: Eq + Hash> Insert<PlanRef> {
         default_columns: Vec<(usize, ExprImpl)>,
         row_id_index: Option<usize>,
         returning: bool,
+        nullables: Vec<bool>,
     ) -> Self {
         Self {
             table_name,
@@ -137,6 +139,7 @@ impl<PlanRef: Eq + Hash> Insert<PlanRef> {
             default_columns,
             row_id_index,
             returning,
+            nullables,
         }
     }
 }

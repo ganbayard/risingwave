@@ -84,6 +84,7 @@ fn pb_field_to_col_desc(
             additional_column_type: 0, // deprecated
             additional_column: Some(AdditionalColumn { column_type: None }),
             version: ColumnDescVersion::LATEST as _,
+            nullable: true,
         })
     } else {
         *index += 1;

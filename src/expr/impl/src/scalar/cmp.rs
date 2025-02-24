@@ -19,7 +19,7 @@ use risingwave_common::array::{Array, BoolArray};
 use risingwave_common::bitmap::Bitmap;
 use risingwave_common::row::Row;
 use risingwave_common::types::{Scalar, ScalarRef, ScalarRefImpl};
-use risingwave_expr::function;
+use risingwave_expr::{function, ExprError, Result};
 
 #[function("equal(boolean, boolean) -> boolean", batch_fn = "boolarray_eq")]
 #[function("equal(*int, *int) -> boolean")]
@@ -429,6 +429,18 @@ fn batch_is_not_null(a: &impl Array) -> BoolArray {
 #[function("secure_compare(varchar, varchar) -> boolean")]
 pub fn secure_compare(left: &str, right: &str) -> bool {
     constant_time_eq(left.as_bytes(), right.as_bytes())
+}
+
+#[function("check_not_null(varchar) -> varchar")]
+#[function("check_not_null(*int) -> auto")]
+fn check_not_null<T1, T2>(v: Option<T1>) -> Result<Option<T2>>
+where
+    T1: Into<T2>,
+{
+    if v.is_none() {
+        return Err(ExprError::NotNullViolation);
+    }
+    Ok(v.map(Into::into))
 }
 
 #[cfg(test)]

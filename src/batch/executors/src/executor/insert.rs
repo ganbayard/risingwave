@@ -26,7 +26,9 @@ use risingwave_common::transaction::transaction_id::TxnId;
 use risingwave_common::types::DataType;
 use risingwave_common::util::chunk_coalesce::DataChunkBuilder;
 use risingwave_dml::dml_manager::DmlManagerRef;
+use risingwave_dml::error::DmlError;
 use risingwave_expr::expr::{build_from_prost, BoxedExpression};
+use risingwave_expr::ExprError;
 use risingwave_pb::batch_plan::plan_node::NodeBody;
 use risingwave_pb::plan_common::IndexAndExpr;
 
@@ -53,6 +55,7 @@ pub struct InsertExecutor {
     returning: bool,
     txn_id: TxnId,
     session_id: u32,
+    nullables: Vec<bool>,
 }
 
 impl InsertExecutor {
@@ -69,6 +72,7 @@ impl InsertExecutor {
         row_id_index: Option<usize>,
         returning: bool,
         session_id: u32,
+        nullables: Vec<bool>,
     ) -> Self {
         let table_schema = child.schema().clone();
         let txn_id = dml_manager.gen_txn_id();
@@ -78,13 +82,7 @@ impl InsertExecutor {
             dml_manager,
             child,
             chunk_size,
-            schema: if returning {
-                table_schema
-            } else {
-                Schema {
-                    fields: vec![Field::unnamed(DataType::Serial)],
-                }
-            },
+            schema: table_schema,
             identity,
             column_indices,
             sorted_default_columns,
@@ -92,6 +90,7 @@ impl InsertExecutor {
             returning,
             txn_id,
             session_id,
+            nullables,
         }
     }
 }
@@ -137,6 +136,17 @@ impl InsertExecutor {
                 .enumerate()
                 .map(|(i, idx)| (*idx, columns[i].clone()))
                 .collect_vec();
+
+            // for (i, (_idx, col)) in ordered_columns.iter().enumerate() {
+            //     // FIXME(kexiang): check len
+            //     let nullable = self.nullables.get(i).copied().unwrap();
+            //     if !nullable {
+            //         let bitmap = col.null_bitmap();
+            //         if !bitmap.all() {
+            //             return Err(BatchError::Expr(ExprError::NotNullViolation));
+            //         }
+            //     }
+            // }
             ordered_columns.reserve(ordered_columns.len() + self.sorted_default_columns.len());
 
             for (idx, expr) in &self.sorted_default_columns {
@@ -256,6 +266,7 @@ impl BoxedExecutorBuilder for InsertExecutor {
             insert_node.row_id_index.as_ref().map(|index| *index as _),
             insert_node.returning,
             insert_node.session_id,
+            insert_node.nullables.clone(),
         )))
     }
 }
@@ -349,6 +360,7 @@ mod tests {
             row_id_index,
             false,
             0,
+            vec![true, true, true],
         ));
         let handle = tokio::spawn(async move {
             let mut stream = insert_executor.execute();
