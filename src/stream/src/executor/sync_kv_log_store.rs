@@ -555,11 +555,11 @@ impl<S: StateStore> SyncedKvLogStoreExecutor<S> {
                     | LogStoreBufferItem::UpdateVnodes(_) => {}
                 }
             }
-
-            let (flush_info, _) = writer.finish().await?;
-            flush_info.report(metrics);
         }
+
         // Apply truncation
+        let (flush_info, _) = writer.finish().await?;
+        flush_info.report(metrics);
         let post_seal = write_state.seal_current_epoch(barrier.epoch.curr, truncation_offset);
 
         // Add to buffer
