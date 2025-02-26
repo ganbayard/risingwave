@@ -149,15 +149,11 @@ impl ColumnIdGenerator {
 
             match &data_type {
                 DataType::Struct(fields) => {
-                    for (field_name, field_data_type) in fields.iter() {
+                    for ((field_name, field_data_type), field_id) in fields.iter().zip_eq(
+                        (fields.ids()).expect("struct field ids not specified in previous version"),
+                    ) {
                         with_segment!(Segment::Field(field_name.to_owned()), {
-                            // TODO: specify id for fields
-                            handle(
-                                existing,
-                                path,
-                                ColumnId::placeholder(),
-                                field_data_type.clone(),
-                            );
+                            handle(existing, path, field_id, field_data_type.clone());
                         });
                     }
                 }
@@ -226,23 +222,24 @@ impl ColumnIdGenerator {
                             path
                         );
                     }
-                    *original_column_id
+                    Some(*original_column_id)
                 }
-                None => ColumnId::placeholder(),
+                None => None,
             };
 
             let new_data_type = match data_type {
                 DataType::Struct(fields) => {
                     let mut new_fields = Vec::new();
+                    let mut ids = Vec::new();
                     for (field_name, field_data_type) in fields.iter() {
-                        // TODO: use id
-                        let (_id, new_field_data_type) =
+                        let (id, new_field_data_type) =
                             with_segment!(Segment::Field(field_name.to_owned()), {
                                 handle(this, path, field_data_type.clone())?
                             });
                         new_fields.push((field_name.to_owned(), new_field_data_type));
+                        ids.push(id);
                     }
-                    DataType::Struct(StructType::new(new_fields))
+                    DataType::Struct(StructType::new(new_fields).with_ids(ids))
                 }
                 DataType::List(inner) => {
                     let (_id, new_inner) =
@@ -263,12 +260,21 @@ impl ColumnIdGenerator {
 
             let need_gen_id = matches!(path.last().unwrap(), Segment::Field(_));
 
-            let new_id = if need_gen_id && original_column_id == ColumnId::placeholder() {
-                let id = this.next_column_id;
-                this.next_column_id = this.next_column_id.next();
-                id
+            let new_id = if need_gen_id {
+                if let Some(id) = original_column_id {
+                    assert!(
+                        id != ColumnId::placeholder(),
+                        "original column id should not be placeholder"
+                    );
+                    id
+                } else {
+                    let id = this.next_column_id;
+                    this.next_column_id = this.next_column_id.next();
+                    id
+                }
             } else {
-                original_column_id
+                // Column ID is actually unused by caller (for list and map types), just use a placeholder.
+                ColumnId::placeholder()
             };
 
             Ok((new_id, new_data_type))
